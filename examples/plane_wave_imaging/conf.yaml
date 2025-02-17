@@ -1,0 +1,44 @@
+frame:
+  datafile: .\FE_fmc.mat
+  instrument_delay: 0 #40.0e-9 # shift the t=0 defined in datafile by this number.
+
+probe:
+  frequency: 5.0e+6
+  numx: 64
+  pitch_x: 0.63e-3
+  numy: 1
+  pitch_y: .nan
+  dimensions: [0.53e-3, 15.e-3, .nan]
+
+toneburst:
+  num_cycles: 4
+  
+probe_location:
+  # Element corresponding to x=0:
+  ref_element: mean
+
+couplant_material:
+  metadata:
+    long_name: Water
+  longitudinal_vel: 1500.
+  density: 1000
+  state_of_matter: liquid
+
+
+block_material:
+  metadata:
+    long_name: 300M
+  longitudinal_vel: 6045.8
+  transverse_vel: 3110.5
+  density: 7830.
+  state_of_matter: solid
+
+scatterer:
+  specs:
+    kind: 'sdh'
+    radius: 0.1e-3 # 500.e-6
+  angle_deg: 90.
+  
+
+array_fname: 'Imasonic 1D 64els 5.00MHz 0.63mm pitch'
+  
