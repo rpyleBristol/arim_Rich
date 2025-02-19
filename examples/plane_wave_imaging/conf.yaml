@@ -1,7 +1,8 @@
 frame:
-  datafile: .\FE_fmc.mat
-  instrument_delay: 0 #40.0e-9 # shift the t=0 defined in datafile by this number.
-
+  dataset_name: examples
+  dataset_item: PWC_immersion_notch_stainless_steel.mat
+  instrument_delay: 500.e-9 # shift the t=0 defined in datafile by this number.
+  
 probe:
   frequency: 5.0e+6
   numx: 64
