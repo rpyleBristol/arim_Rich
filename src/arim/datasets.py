@@ -14,7 +14,7 @@ import pooch
 
 EXAMPLES = pooch.create(
     path=pooch.os_cache("arim"),
-    base_url="C:/Users/rp14082/OneDrive - University of Bristol/Useful Functions/Bristol FE2/BristolFE-v2-main/arim_Rich/examples/example-datasets/",
+    base_url="https://github.com/rpyleBristol/arim_Rich/raw/f31a771560f3dfdcec1735eb949611d9aa64080d/examples/example-datasets/",
     version=None,
     version_dev=None,
     registry={
