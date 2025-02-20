@@ -195,6 +195,7 @@ def make_paths_pwi(
     probe = interface_dict["probe"]
     frontwall = interface_dict["frontwall_trans"]
     grid = interface_dict["grid"]
+    
     wall_dict = OrderedDict(
         (key, val)
         for key, val in interface_dict.items()
@@ -231,7 +232,7 @@ def make_paths_pwi(
                 materials=path_materials,
                 modes=path_modes,
             )
-            path.name = path.name + '_p'
+            path.name = path.name + ' -pw'
             paths[path.name] = path
     return paths
 
@@ -288,7 +289,6 @@ def make_views_pwi(
         scatterers_oriented_points,
         walls,
     )
-
     paths_tx = make_paths_pwi(block, couplant, interfaces, max_number_of_reflection)
     paths_rx = make_paths(block, couplant, interfaces, max_number_of_reflection)
     
@@ -323,4 +323,173 @@ def make_views_from_paths_pwi(paths_dict_tx, paths_dict_rx):
 
     return views
 
+def shift_time_domain_signals(Frame, transmission):
+    data = Frame.timetraces
+    time_points = Frame.time.samples
+    delays = transmission['delay_times']
+    num_signals, num_time_points = data.shape
+    shifted_data = np.zeros_like(data)
+    
+    for i in range(num_signals):
+        delay = delays[i]
 
+        delay_samples = int(np.round(delay / (time_points[1] - time_points[0])))
+        if delay_samples == 0:
+            shifted_data[i, :] = data[i, :]
+        elif delay_samples < num_time_points:
+            shifted_data[i, delay_samples:] = data[i, :-delay_samples]
+        else:
+            shifted_data[i, :] = 0
+            print("Error: delay longer than time vector")
+    Frame.timetraces = shifted_data
+    return Frame
+
+
+
+def find_intersections(ray_current, interface_current, intersect_tol=1e-9):
+        
+    pts_ray, ori_ray = ray_current
+    coords = interface_current.points.coords
+
+
+    intersection_pts = np.zeros((pts_ray.shape[0], 3))
+    angles_of_incidence = np.zeros(pts_ray.shape[0])
+    surface_angles = np.zeros(pts_ray.shape[0])
+
+    for idx in range(pts_ray.shape[0]):
+        ray_origin = pts_ray[idx]
+        ray_direction = np.array([ori_ray.x[idx, 2], 0, ori_ray.z[idx, 2]])
+        #ray_direction = ray_direction / np.linalg.norm(ray_direction)
+
+        closest_intersection = None
+        min_distance = float('inf')
+        for i in range(len(coords) - 1):
+            p1 = coords[i]
+            p2 = coords[i + 1]
+
+            # Define the segment direction
+            segment_direction = p2 - p1
+            segment_direction = segment_direction / np.linalg.norm(segment_direction)
+
+            # Calculate intersection point
+            A1 = ray_direction[2]
+            B1 = -ray_direction[0]
+            C1 = A1 * ray_origin[0] + B1 * ray_origin[2]
+
+            A2 = segment_direction[2]
+            B2 = -segment_direction[0]
+            C2 = A2 * p1[0] + B2 * p1[2]
+
+            det = A1 * B2 - A2 * B1
+
+            if det != 0:
+                x_intersect = (B2 * C1 - B1 * C2) / det
+                z_intersect = (A1 * C2 - A2 * C1) / det
+                intersection_point = np.array([x_intersect, 0, z_intersect])
+
+                # Check if the intersection point is within the segment and in the direction of the ray
+                if ((min(p1[0], p2[0])-intersect_tol) <= x_intersect <= (max(p1[0], p2[0])+intersect_tol) and
+                    (min(p1[2], p2[2])-intersect_tol) <= z_intersect <= (max(p1[2], p2[2])+intersect_tol) and
+                    np.dot(intersection_point - ray_origin, ray_direction) > 0):
+                    distance = np.linalg.norm(intersection_point - ray_origin)
+
+                    if distance < min_distance:
+                        min_distance = distance
+                        closest_intersection = intersection_point
+
+                        # Calculate angle of incidence
+                        normal = np.array([-segment_direction[2], 0, segment_direction[0]])  # Normal vector to the segment
+                        dot_product = np.dot(ray_direction, normal)
+                        cross_product = np.cross(ray_direction, normal)
+                        angle_of_incidence = np.arccos(np.clip(dot_product, -1.0, 1.0))
+                        if cross_product[1] > 0:
+                            angle_of_incidence = -angle_of_incidence
+
+                        # Calculate the angle of the surface at the intersection point
+                        surface_angle = np.arctan2(segment_direction[2], segment_direction[0])
+                        surface_angle = np.degrees(surface_angle)
+
+        if closest_intersection is not None:
+            intersection_pts[idx] = closest_intersection
+            angles_of_incidence[idx] = angle_of_incidence
+            surface_angles[idx] = surface_angle
+        else:
+            intersection_pts[idx] = np.nan
+            angles_of_incidence[idx] = np.nan
+            surface_angles[idx] = np.nan
+
+    return intersection_pts, angles_of_incidence, surface_angles
+
+def make_orient_pts_from_intersect(coords,angles_of_incidence,name='Plane wave intersections'):
+    or_pts = []
+    for b in range(coords.shape[0]):
+        points = g.Points(coords[b:b+1])
+        orientations = g.default_orientations(points)
+        #rot_mat = Rotation.from_euler('xyz', [0,angles_of_incidence[b],0], degrees=False).as_matrix()
+        rot_mat = g.rotation_matrix_y(angles_of_incidence[b])
+        orientations = orientations.rotate(rot_mat)
+        or_pts.append(g.OrientedPoints(points,orientations))
+    or_pts = g.combine_oriented_points(or_pts,name=name)
+    return or_pts
+
+import arim.plot as aplt
+import matplotlib.pyplot as plt
+def fn_PWI_ray_tracing(views,N_rays,plane_waves,intersect_tol=1e-9,plot_on=False):
+
+    rays = {}
+    for viewname, view in views.items():
+        path = view.tx_path
+        interfaces = path.interfaces[:-1] #skip grid
+        for wavename, couplant_angle in plane_waves.items():
+            wavename = 'PW 0'
+            #Initial ray positions
+            probe_coords = interfaces[0].points
+            origin_coords = np.stack([np.linspace(probe_coords.x.min(),probe_coords.x.max(),N_rays,endpoint=True),
+                                         np.zeros([N_rays,]),
+                                         np.linspace(probe_coords.z.max(),probe_coords.z.max(),N_rays,endpoint=True)],1)
+            origin_angles = np.radians(np.ones(N_rays)*couplant_angle)
+            rays[viewname] = {}
+            rays[viewname][wavename] = [ make_orient_pts_from_intersect(origin_coords,origin_angles,name=wavename+f', interface {0}') ]
+            
+            for ii in range(len(interfaces)-1):
+                
+                #Intersections of rays into next surface
+                interface_current = interfaces[ii+1]
+                rays_previous = rays[viewname][wavename][ii]
+                m1 = path.modes[ii]
+                c1 = path.materials[ii].velocity(m1)
+
+
+                m2 = path.modes[ii+1]
+                c2 = path.materials[ii+1].velocity(m2)
+   
+                intersection_pts, angles_of_incidence, surface_angles = find_intersections(rays_previous,interface_current, intersect_tol=intersect_tol)
+                angles_of_transmission = np.arcsin(np.sin(angles_of_incidence) * c2 / c1) + surface_angles
+                if ii > 0:
+                    #ASSUMING REFLECTIONS PAST FIRST TRANSMISSION
+                    angles_of_transmission = np.pi - angles_of_transmission
+                    
+                
+                new_ray = make_orient_pts_from_intersect(intersection_pts,angles_of_transmission,name=wavename+f', interface {ii+1}')
+                rays[viewname][wavename].append(new_ray)
+
+        
+            if plot_on:
+                #Plot 
+                plt.figure()
+                ax = plt.subplot()
+                aplt.plot_interfaces(
+                    rays[viewname][wavename],
+                    ax=ax,
+                    show_probe=True,
+                    show_last=True,
+                    show_orientations=True,
+                    n_arrows=10,markers=["o"]*len(interfaces),)
+                aplt.plot_interfaces(
+                    interfaces,
+                    ax = ax,
+                    show_last=True,
+                    markers=["-"]*len(interfaces),
+                )
+
+    return rays

@@ -126,7 +126,10 @@ def _load_frame(exp_data, probe):
     # Remark: [...] is required to read in the case of HDF5 file
     # (and does nothing if we have a regular array
     timetraces = np.squeeze(exp_data["time_data"][...])
-    timetraces = timetraces.astype(s.FLOAT)
+    if np.iscomplex(timetraces).sum():
+        timetraces = timetraces.astype(s.COMPLEX)
+    else:
+        timetraces = timetraces.astype(s.FLOAT)
     # exp_data.time_data is such as a two consecutive time samples are stored contiguously, which
     # is what we want. However Matlab saves either in Fortran order (shape: numtimetraces x numsamples)
     # or C order (shape: numsamples x numtimetraces). We force using the later case.

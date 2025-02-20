@@ -1,15 +1,15 @@
 frame:
   dataset_name: examples
   dataset_item: PWC_immersion_notch_stainless_steel.mat
-  instrument_delay: 500.e-9 # shift the t=0 defined in datafile by this number.
+  instrument_delay: 400.e-9 # shift the t=0 defined in datafile by this number.
   
 probe:
   frequency: 5.0e+6
-  numx: 64
-  pitch_x: 0.63e-3
+  numx: 40
+  pitch_x: 0.3e-3
   numy: 1
   pitch_y: .nan
-  dimensions: [0.53e-3, 15.e-3, .nan]
+  dimensions: [0.2e-3, 15.e-3, .nan]
 
 toneburst:
   num_cycles: 4
@@ -21,24 +21,28 @@ probe_location:
 couplant_material:
   metadata:
     long_name: Water
-  longitudinal_vel: 1500.
-  density: 1000
+    source: "Krautkrämer 1990"
+  longitudinal_vel: 1469.
+  density: 1000.
   state_of_matter: liquid
-
 
 block_material:
   metadata:
-    long_name: 300M
-  longitudinal_vel: 6045.8
-  transverse_vel: 3110.5
-  density: 7830.
-  state_of_matter: solid
+    long_name: Stainless steel
+    source: R.Pyle EngD Thesis
+  longitudinal_vel: 5735.
+  transverse_vel: 3152.
+  density: 2700.
 
 scatterer:
-  specs:
-    kind: 'sdh'
-    radius: 0.1e-3 # 500.e-6
-  angle_deg: 90.
+    angle_deg: 90.
+    location:
+    x: -21.0e-3
+    y: 0.0
+    z: 30.0e-3
+    specs:
+         kind: crack_tip
+         crack_length: 1e-3
   
 
 array_fname: 'Imasonic 1D 64els 5.00MHz 0.63mm pitch'

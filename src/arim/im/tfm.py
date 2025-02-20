@@ -515,6 +515,7 @@ def tfm_for_view(frame, grid, view, amplitudes=None, mask=None, **kwargs_delay_a
     focal_law = FocalLaw(lookup_times_tx, lookup_times_rx, amplitudes)
 
     res = das.delay_and_sum(frame, focal_law, **kwargs_delay_and_sum)
+    
     if type(grid) in (g.Grid, g.Points):
         res = res.reshape(grid.shape)
     elif type(grid) is g.MaskedGrid:
