@@ -41,8 +41,8 @@ imaging_res = 0.1e-3
 wall_points_per_mm = 10#8
 
 ## Sample
-standoff = 0.0201
-thickness = 0.01
+standoff = 0.0195
+thickness = 0.0099
 
 ## Plane waves
 couplant_angles = [-19.2414] #Angle of plane waves fired
@@ -80,11 +80,11 @@ Examination = arim.core.BlockInImmersion(arim.io.material_from_conf(conf['block_
 ##Grid
 Grid = arim.geometry.Grid(
     xmin = -22e-3,#x1[0]-1e-3,
-    xmax = -12e-3,#x1[-1]+1e-3,
+    xmax = -12.1e-3,#x1[-1]+1e-3,
     ymin = 0.0,
     ymax = 0.0,
     zmin = standoff,
-    zmax = standoff+thickness,
+    zmax = standoff+9.8e-3,
     pixel_size = imaging_res,
 )
 N_rays = 2*Probe.numelements - 1 # (2*numelements - 1) in Rachev, Rosen K., et al. "Plane wave imaging techniques for immersion testing of components with nonplanar surfaces."
@@ -109,7 +109,7 @@ Probe = arim.io.probe_from_conf(conf)
 #%% Transmission delay law (calc used in transmission, not in imaging, only here for fullness)
 Nt = len(couplant_angles) #number of fired plane waves
 
-block_angles =  np.arcsin( np.sin(np.deg2rad(couplant_angles)) *conf['block_material']['longitudinal_vel'] / conf['couplant_material']['longitudinal_vel'])
+block_angles =  np.arcsin( np.sin(np.deg2rad(couplant_angles)) *conf['block_material']['transverse_vel'] / conf['couplant_material']['longitudinal_vel'])
 ref_elements = []
 for c in couplant_angles:
     if c < 0:
@@ -134,12 +134,12 @@ transmission['reference_element_delay'] = np.zeros([Nt,conf['probe']['numx']])
 for angle,n in zip(couplant_angles,range(Nt)):
     t_x_diff_ref = Probe.locations.x.mean()-Probe.locations.x[ref_elements[n]]
     delay_vec_ref = t_x_diff_ref * np.sin(np.deg2rad(angle)) / conf['couplant_material']['longitudinal_vel']
-    transmission['reference_element_delay'][n,:] = -abs(delay_vec_ref)
+    transmission['reference_element_delay'][n,:] = delay_vec_ref
 
 transmission['reference_element_delay'] = transmission['reference_element_delay'].flatten(order=timetrace_flatten_order)
 
 Frame = shift_time_domain_signals(Frame,transmission['reference_element_delay'])
-
+#Frame.timetraces = np.roll(Frame.timetraces,np.round(delay_vec_ref[0]/Frame.time.step).astype(int),1)
 #
 plt.figure()
 plt.imshow(abs(Frame.timetraces))
@@ -363,8 +363,8 @@ lookup_times_rx[:,np.isinf(lookup_times_tx.sum(0))] = np.inf
 recieve_el = 20
 plane_wave_n = 0
 
-plotting = views[viewname_used].tx_path.rays.times[plane_wave_n].reshape(Grid.shape)[:,0,:].T
-#plotting += views[viewname_used].rx_path.rays.times[recieve_el].reshape(Grid.shape)[:,0,:].T
+#plotting = views[viewname_used].tx_path.rays.times[plane_wave_n].reshape(Grid.shape)[:,0,:].T
+plotting = views[viewname_used].rx_path.rays.times[recieve_el].reshape(Grid.shape)[:,0,:].T
 
 extent = [Grid.xmin,Grid.xmax,Grid.zmax,Grid.zmin]
 plt.figure(figsize=[8,4])
@@ -374,7 +374,7 @@ plt.xlim([extent[0],extent[1]])
 plt.ylim([extent[2],extent[3]])
 cbar = plt.colorbar()
 cbar.set_label('Travel time (µs)', rotation=270, labelpad=9)
-aplt.plot_interfaces(
+"""aplt.plot_interfaces(
     [
         Probe.to_oriented_points(),
         *Examination.walls.values(),
@@ -383,7 +383,7 @@ aplt.plot_interfaces(
     ax = ax,
     show_last=False,
     markers=[".", "-", "-", "d", ".k"],
-)
+)"""
 
 """for rr in range(n_rays):
     r = rays_current[rr][0].coords
