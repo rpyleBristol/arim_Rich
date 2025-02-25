@@ -100,8 +100,8 @@ Paths = bim.make_paths(Examination.block_material, Examination.couplant_material
 
 #Frame
 Frame = arim.io.frame_from_conf(conf)
-import scipy
-Frame.timetraces = scipy.io.loadmat('L5_A0_sim.mat')['exp_data']['timetraces'][0][0][0].T
+#import scipy
+#Frame.timetraces = scipy.io.loadmat('L5_A0_sim.mat')['exp_data']['timetraces'][0][0][0].T
 
 #Probe
 Probe = arim.io.probe_from_conf(conf)
