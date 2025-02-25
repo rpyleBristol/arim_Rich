@@ -1,7 +1,7 @@
 frame:
   dataset_name: examples
   dataset_item: PWC_immersion_notch_stainless_steel.mat
-  instrument_delay: 400.e-9 # shift the t=0 defined in datafile by this number.
+  instrument_delay: 0.4e-6 # shift the t=0 defined in datafile by this number.
   
 probe:
   frequency: 5.0e+6
@@ -22,7 +22,7 @@ couplant_material:
   metadata:
     long_name: Water
     source: "Krautkrämer 1990"
-  longitudinal_vel: 1469.
+  longitudinal_vel: 1458.
   density: 1000.
   state_of_matter: liquid
 

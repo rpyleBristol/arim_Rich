@@ -323,10 +323,9 @@ def make_views_from_paths_pwi(paths_dict_tx, paths_dict_rx):
 
     return views
 
-def shift_time_domain_signals(Frame, transmission):
+def shift_time_domain_signals(Frame, delays):
     data = Frame.timetraces
     time_points = Frame.time.samples
-    delays = transmission['delay_times']
     num_signals, num_time_points = data.shape
     shifted_data = np.zeros_like(data)
     
@@ -336,8 +335,10 @@ def shift_time_domain_signals(Frame, transmission):
         delay_samples = int(np.round(delay / (time_points[1] - time_points[0])))
         if delay_samples == 0:
             shifted_data[i, :] = data[i, :]
-        elif delay_samples < num_time_points:
+        elif delay_samples < num_time_points and delay_samples>0:
             shifted_data[i, delay_samples:] = data[i, :-delay_samples]
+        elif delay_samples < num_time_points and delay_samples<0:
+            shifted_data[i, :-abs(delay_samples)] = data[i, abs(delay_samples):]
         else:
             shifted_data[i, :] = 0
             print("Error: delay longer than time vector")
@@ -346,7 +347,7 @@ def shift_time_domain_signals(Frame, transmission):
 
 
 
-def find_intersections(ray_current, interface_current, intersect_tol=1e-9):
+def find_intersections(ray_current, interface_current, intersect_tol=1e-9, closest=True):
         
     pts_ray, ori_ray = ray_current
     coords = interface_current.points.coords
@@ -361,8 +362,11 @@ def find_intersections(ray_current, interface_current, intersect_tol=1e-9):
         ray_direction = np.array([ori_ray.x[idx, 2], 0, ori_ray.z[idx, 2]])
         #ray_direction = ray_direction / np.linalg.norm(ray_direction)
 
-        closest_intersection = None
-        min_distance = float('inf')
+        returned_intersection = None
+        if closest:
+            distance_check = float('inf')
+        else:
+            distance_check = 0
         for i in range(len(coords) - 1):
             p1 = coords[i]
             p2 = coords[i + 1]
@@ -393,9 +397,13 @@ def find_intersections(ray_current, interface_current, intersect_tol=1e-9):
                     np.dot(intersection_point - ray_origin, ray_direction) > 0):
                     distance = np.linalg.norm(intersection_point - ray_origin)
 
-                    if distance < min_distance:
-                        min_distance = distance
-                        closest_intersection = intersection_point
+                    if closest:
+                        test = distance < distance_check
+                    else:
+                        test = distance > distance_check
+                    if test:
+                        distance_check = distance
+                        returned_intersection = intersection_point
 
                         # Calculate angle of incidence
                         normal = np.array([-segment_direction[2], 0, segment_direction[0]])  # Normal vector to the segment
@@ -409,8 +417,8 @@ def find_intersections(ray_current, interface_current, intersect_tol=1e-9):
                         surface_angle = np.arctan2(segment_direction[2], segment_direction[0])
                         surface_angle = np.degrees(surface_angle)
 
-        if closest_intersection is not None:
-            intersection_pts[idx] = closest_intersection
+        if returned_intersection is not None:
+            intersection_pts[idx] = returned_intersection
             angles_of_incidence[idx] = angle_of_incidence
             surface_angles[idx] = surface_angle
         else:
@@ -449,7 +457,7 @@ def fn_PWI_ray_tracing(views,N_rays,plane_waves,intersect_tol=1e-9,plot_on=False
                                          np.linspace(probe_coords.z.max(),probe_coords.z.max(),N_rays,endpoint=True)],1)
             origin_angles = np.radians(np.ones(N_rays)*couplant_angle)
             rays[viewname] = {}
-            rays[viewname][wavename] = [ make_orient_pts_from_intersect(origin_coords,origin_angles,name=wavename+f', interface {0}') ]
+            rays[viewname][wavename] = [ make_orient_pts_from_intersect(origin_coords,origin_angles,name=wavename+f', {interfaces[0].points.name}') ]
             
             for ii in range(len(interfaces)-1):
                 
@@ -470,7 +478,7 @@ def fn_PWI_ray_tracing(views,N_rays,plane_waves,intersect_tol=1e-9,plot_on=False
                     angles_of_transmission = np.pi - angles_of_transmission
                     
                 
-                new_ray = make_orient_pts_from_intersect(intersection_pts,angles_of_transmission,name=wavename+f', interface {ii+1}')
+                new_ray = make_orient_pts_from_intersect(intersection_pts,angles_of_transmission,name=wavename+f', {interface_current.points.name}')
                 rays[viewname][wavename].append(new_ray)
 
         

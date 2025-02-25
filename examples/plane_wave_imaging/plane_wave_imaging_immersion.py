@@ -37,11 +37,11 @@ array_width = conf['probe']['pitch_x'] * (conf['probe']['numx']-1)
 array_rot = np.array([0,0,0])
 
 ## Imaging mesh
-imaging_res = 0.2e-3
+imaging_res = 0.1e-3
 wall_points_per_mm = 10#8
 
 ## Sample
-standoff = 0.0202
+standoff = 0.0201
 thickness = 0.01
 
 ## Plane waves
@@ -79,14 +79,16 @@ Examination = arim.core.BlockInImmersion(arim.io.material_from_conf(conf['block_
      
 ##Grid
 Grid = arim.geometry.Grid(
-    xmin = x1[0]-1e-3,
-    xmax = x1[-1]+1e-3,
+    xmin = -22e-3,#x1[0]-1e-3,
+    xmax = -12e-3,#x1[-1]+1e-3,
     ymin = 0.0,
     ymax = 0.0,
-    zmin = -1e-3,
-    zmax = z2[0]+1e-3,
+    zmin = standoff,
+    zmax = standoff+thickness,
     pixel_size = imaging_res,
 )
+N_rays = 2*Probe.numelements - 1 # (2*numelements - 1) in Rachev, Rosen K., et al. "Plane wave imaging techniques for immersion testing of components with nonplanar surfaces."
+
     
 
 #Paths
@@ -98,30 +100,49 @@ Paths = bim.make_paths(Examination.block_material, Examination.couplant_material
 
 #Frame
 Frame = arim.io.frame_from_conf(conf)
+import scipy
+Frame.timetraces = scipy.io.loadmat('L5_A0_sim.mat')['exp_data']['timetraces'][0][0][0].T
 
 #Probe
 Probe = arim.io.probe_from_conf(conf)
-#%% Transmission delay calc (note - must match the one used in acquisition)
+
+#%% Transmission delay law (calc used in transmission, not in imaging, only here for fullness)
 Nt = len(couplant_angles) #number of fired plane waves
 
-#couplant_angles =  np.arcsin( np.sin(block_angles) *conf['couplant_material']['longitudinal_vel'] / conf['block_material']['longitudinal_vel'])
 block_angles =  np.arcsin( np.sin(np.deg2rad(couplant_angles)) *conf['block_material']['longitudinal_vel'] / conf['couplant_material']['longitudinal_vel'])
+ref_elements = []
+for c in couplant_angles:
+    if c < 0:
+        ref_elements.append([-1]) #Element with time=0 delay
+    else:
+        ref_elements.append([0])
 transmission = {'block_angles':block_angles,
-                         'couplant_angles':couplant_angles}
+                'couplant_angles':couplant_angles,
+                'reference_elements':ref_elements}
 
 #Delay law
 transmission['delay_times'] = np.zeros([Nt,conf['probe']['numx']])
 for angle,n in zip(couplant_angles,range(Nt)):
-    t_x_diff = Probe.locations.x-Probe.locations.x[0];
+    t_x_diff = Probe.locations.x-Probe.locations.x[ref_elements[n]]
     delay_vec = t_x_diff * np.sin(np.deg2rad(angle)) / conf['couplant_material']['longitudinal_vel']
-    delay_vec -= delay_vec.min()
+
     transmission['delay_times'][n,:] = delay_vec
 transmission['delay_times'] = transmission['delay_times'].flatten(order=timetrace_flatten_order)
+#%% Apply delay to timetraces so at 0 time the wavefront is at the reference element
 
-#%% Account for transmission delay in Frame
+transmission['reference_element_delay'] = np.zeros([Nt,conf['probe']['numx']])
+for angle,n in zip(couplant_angles,range(Nt)):
+    t_x_diff_ref = Probe.locations.x.mean()-Probe.locations.x[ref_elements[n]]
+    delay_vec_ref = t_x_diff_ref * np.sin(np.deg2rad(angle)) / conf['couplant_material']['longitudinal_vel']
+    transmission['reference_element_delay'][n,:] = -abs(delay_vec_ref)
 
-Frame = shift_time_domain_signals(Frame,transmission)
+transmission['reference_element_delay'] = transmission['reference_element_delay'].flatten(order=timetrace_flatten_order)
 
+Frame = shift_time_domain_signals(Frame,transmission['reference_element_delay'])
+
+#
+plt.figure()
+plt.imshow(abs(Frame.timetraces))
 #%% Views
 imaging_walls = ['Backwall']
 views = make_views_pwi(
@@ -136,7 +157,6 @@ views = OrderedDict({viewname_used:views[viewname_used]})
 
 #%% PWI focal law (i. propogation time calcs)
 
-N_rays = 2*Probe.numelements - 1 # (2*numelements - 1) in Rachev, Rosen K., et al. "Plane wave imaging techniques for immersion testing of components with nonplanar surfaces."
 c1 = Examination.couplant_material.longitudinal_vel
 c2 = Examination.block_material.transverse_vel
             
@@ -151,7 +171,8 @@ grid_bound_corners = np.array([[Grid.xmin,0,Grid.zmin],
                                 [Grid.xmax,0,Grid.zmax],
                                 [Grid.xmin,0,Grid.zmax],
                                 [Grid.xmin,0,Grid.zmin]])
-grid_bound_pts = fn_SurfaceToWall([grid_bound_corners],1,names=['Grid bound'])['Grid bound']
+grid_bound_pts = g.Points(grid_bound_corners,name='Grid bound')
+grid_bound_pts = g.default_oriented_points(grid_bound_pts)
 probe_centre = Probe.locations.coords.mean(0)
 for viewname, view in views.items():
     interfaces = view.tx_path.interfaces
@@ -166,7 +187,7 @@ for viewname, view in views.items():
         in_plane_wave = np.zeros(Grid.shape,dtype=bool)
 
         #Find beams in imaging grid
-        grid_bound_intersections, _ , _ = find_intersections(rays_last_interface,grid_bound_pts, intersect_tol=1e-9)
+        grid_bound_intersections, _ , _ = find_intersections(rays_last_interface,grid_bound_pts, intersect_tol=1e-9, closest=False)
         
         
         #Travel time up to last interface
@@ -195,35 +216,35 @@ for viewname, view in views.items():
             b = b[b[:, 0].argsort()]
             
             beam_bounds = [[r[0,0],r[0,2]],
-                            [b[0,0],b[0,2]],
+                            [r[1,0],r[1,2]],
                             [b[1,0],b[1,2]],
-                            [r[1,0],r[1,2]]]
+                            [b[0,0],b[0,2]]]
     
             in_beam = is_point_in_polygon_grid(Grid, beam_bounds)
             in_beam = in_beam[:,np.newaxis,:]
             in_plane_wave[in_beam] = True
-            in_beam = in_beam.flatten()
+            in_beam = in_beam.flatten() 
             
             
             dx = Grid.x - r_mean[0]
             dy = Grid.y - r_mean[1]
-            dz = Grid.z- r_mean[2]
+            dz = Grid.z - r_mean[2]
             interface_to_grid_vec = np.array([dx.flatten(),dy.flatten(),dz.flatten()]).T
             ray_ori = rays_last_interface.orientations
             ray_ori_mean = np.array([ray_ori.x[rr:rr+2, 2].mean(0), 0, ray_ori.z[rr:rr+2, 2].mean(0)])
-            
+            ray_ori_mean /= np.linalg.norm(ray_ori_mean,2)
             dist_grid = np.dot(interface_to_grid_vec,ray_ori_mean)
             grid_time = dist_grid / vel_final
-            
-            #Adjust for offset of ray origin from centre of array
+
+            #Adjust for offset of beam origin from centre of array
             ray_origin = rays_first_interface.points[rr:rr+2].mean(0)
             ray_origin_ori = rays_first_interface.orientations
             ray_origin_ori_mean = np.array([ray_origin_ori.x[rr:rr+2, 2].mean(0), 0, ray_origin_ori.z[rr:rr+2, 2].mean(0)])
+            ray_origin_ori_mean /= np.linalg.norm(ray_origin_ori_mean,2)
             dx_adj = ray_origin[0] - probe_centre[0]
             dy_adj = ray_origin[1] - probe_centre[1]
             dz_adj = ray_origin[2] - probe_centre[2]
             origin_to_probe_centre_vec = np.array([dx_adj,dy_adj,dz_adj])
-            
             dist_adj = np.dot(origin_to_probe_centre_vec,ray_origin_ori_mean)
             adj_time = dist_adj / vel_initial
             
@@ -231,7 +252,7 @@ for viewname, view in views.items():
             n_overwrite = np.sum(travel_times[nn,in_beam.flatten()]>0)
             if n_overwrite>0:
                 print(f"Overwriting {n_overwrite} grid points")
-            travel_times[nn,in_beam] = grid_time[in_beam] + interface_time[rr] + adj_time
+            travel_times[nn,in_beam] = interface_time[rr] + grid_time[in_beam] + adj_time
         travel_times[nn,~in_plane_wave.flatten()] = np.inf
         
 #%%  TEMP RAYS OBJECT TO CARRY TRAVEL TIMES
@@ -345,8 +366,6 @@ plane_wave_n = 0
 plotting = views[viewname_used].tx_path.rays.times[plane_wave_n].reshape(Grid.shape)[:,0,:].T
 #plotting += views[viewname_used].rx_path.rays.times[recieve_el].reshape(Grid.shape)[:,0,:].T
 
-#plotting *= in_plane_wave[:,0,:].T
-
 extent = [Grid.xmin,Grid.xmax,Grid.zmax,Grid.zmin]
 plt.figure(figsize=[8,4])
 ax = plt.subplot()
@@ -384,33 +403,47 @@ for viewname, view in views.items():
 
 # %% Plot PWI
 clim = -40
-
 for i, (viewname, pwi) in enumerate(pwis.items()):
     assert pwi.grid is Grid
-
-    ax, _ = aplt.plot_tfm(
-        pwi,
+    fig=plt.figure(figsize=[10,6])
+    ax1 = fig.add_subplot(121)
+    
+    aplt.plot_tfm(
+        pwis[viewname],ax=ax1,
         clim=clim,
         scale="db",
         title=f"PWI {viewname}",
         savefig=False,
         draw_cbar=True,
-        interpolation="none"
+        interpolation="none",
+        cmap='jet'
     )
-    ax.set_adjustable("box")
-    ax.axis([Grid.xmin, Grid.xmax, Grid.zmax, 0])
+    ax1.set_adjustable("box")
+    ax1.axis([Grid.xmin, Grid.xmax, Grid.zmax, 0])
     aplt.plot_interfaces(
         [
             Probe.to_oriented_points(),
             *Examination.walls.values(),
             Grid.to_oriented_points(),
         ],
-        ax = ax,
+        ax = ax1,
         show_last=False,
         markers=[".", "-", "-", "d", ".k"],
     )
-# Block script until windows are closed.
-plt.show()
+    # Block script until windows are closed.
+    
+    ax2=fig.add_subplot(122)
+    ax2, _ = aplt.plot_tfm(
+        pwis[viewname],ax=ax2,
+        clim=clim,
+        scale="db",
+        title=f"PWI {viewname}",
+        savefig=False,
+        draw_cbar=True,
+        interpolation="none",
+        cmap='jet'
+    )
+    plt.show()
 
 
 
