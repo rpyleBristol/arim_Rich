@@ -347,6 +347,7 @@ def shift_time_domain_signals(Frame, delays):
 
 
 
+
 def find_intersections(ray_current, interface_current, intersect_tol=1e-9, closest=True):
         
     pts_ray, ori_ray = ray_current
@@ -442,21 +443,22 @@ def make_orient_pts_from_intersect(coords,angles_of_incidence,name='Plane wave i
 
 import arim.plot as aplt
 import matplotlib.pyplot as plt
-def fn_PWI_ray_tracing(views,N_rays,plane_waves,intersect_tol=1e-9,plot_on=False):
+def PWI_find_all_intersections(views,N_rays,plane_waves,intersect_tol=1e-9,plot_on=False):
 
     rays = {}
     for viewname, view in views.items():
         path = view.tx_path
+        rays[viewname] = {}
         interfaces = path.interfaces[:-1] #skip grid
         for wavename, couplant_angle in plane_waves.items():
-            wavename = 'PW 0'
+            
             #Initial ray positions
             probe_coords = interfaces[0].points
             origin_coords = np.stack([np.linspace(probe_coords.x.min(),probe_coords.x.max(),N_rays,endpoint=True),
                                          np.zeros([N_rays,]),
                                          np.linspace(probe_coords.z.max(),probe_coords.z.max(),N_rays,endpoint=True)],1)
             origin_angles = np.radians(np.ones(N_rays)*couplant_angle)
-            rays[viewname] = {}
+            
             rays[viewname][wavename] = [ make_orient_pts_from_intersect(origin_coords,origin_angles,name=wavename+f', {interfaces[0].points.name}') ]
             
             for ii in range(len(interfaces)-1):
@@ -501,3 +503,109 @@ def fn_PWI_ray_tracing(views,N_rays,plane_waves,intersect_tol=1e-9,plot_on=False
                 )
 
     return rays
+
+from arim.ray import FermatPath, Rays
+def ray_tracing_for_views_PWI(Grid,Probe,views,plane_waves,rays):
+    grid_bound_corners = np.array([[Grid.xmin,0,Grid.zmin],
+                                    [Grid.xmax,0,Grid.zmin],
+                                    [Grid.xmax,0,Grid.zmax],
+                                    [Grid.xmin,0,Grid.zmax],
+                                    [Grid.xmin,0,Grid.zmin]])
+    grid_bound_pts = g.Points(grid_bound_corners,name='Grid bound')
+    grid_bound_pts = g.default_oriented_points(grid_bound_pts)
+    probe_centre = Probe.locations.coords.mean(0)
+    Nt = len(plane_waves.items())
+    for viewname, view in views.items():
+        travel_times = np.zeros([Nt,Grid.size])
+        numlegs = view.tx_path.numlegs
+        assert view.tx_path.interfaces[-1].points.name == Grid.name
+        in_plane_wave = np.zeros(Grid.shape,dtype=bool)
+        for nn,(wavename, couplant_angle) in enumerate(plane_waves.items()):
+            rays_last_interface = rays[viewname][wavename][-1]
+            rays_first_interface = rays[viewname][wavename][0]
+            n_rays = rays_last_interface.points.shape[0]
+            
+    
+            #Find beams in imaging grid
+            grid_bound_intersections, _ , _ = find_intersections(rays_last_interface,grid_bound_pts, intersect_tol=1e-9, closest=False)
+            
+            
+            #Travel time up to last interface
+            interface_time = np.zeros([n_rays-1])
+            interface_dist = np.zeros([n_rays-1])
+            for ii in range(numlegs-1):
+                vel = view.tx_path.velocities[ii]
+                for rr in range(n_rays-1):
+                    #Approximate beam travel time as mean of side rays
+                    p1 = rays[viewname][wavename][ii].points[rr:rr+2].mean(0) 
+                    p2 = rays[viewname][wavename][ii+1].points[rr:rr+2].mean(0)
+                    dist = np.sqrt(np.sum(np.square(p2-p1)))
+                    interface_dist[rr] += dist
+                    interface_time[rr] += dist / vel
+      
+            #Travel time from last interface to grid
+            vel_final = view.tx_path.velocities[-1]
+            vel_initial = view.tx_path.velocities[0]
+            for rr in range(n_rays-1):    
+                r = rays_last_interface.points[rr:rr+2]
+                r_mean = r.mean(0)
+                b = grid_bound_intersections[rr:rr+2]
+                
+                #sort left to right
+                r = r[r[:, 0].argsort()]
+                b = b[b[:, 0].argsort()]
+                
+                beam_bounds = [[r[0,0],r[0,2]],
+                                [r[1,0],r[1,2]],
+                                [b[1,0],b[1,2]],
+                                [b[0,0],b[0,2]]]
+        
+                in_beam = is_point_in_polygon_grid(Grid, beam_bounds)
+                in_beam = in_beam[:,np.newaxis,:]
+                in_plane_wave[in_beam] = True
+                in_beam = in_beam.flatten() 
+                
+                
+                dx = Grid.x - r_mean[0]
+                dy = Grid.y - r_mean[1]
+                dz = Grid.z - r_mean[2]
+                interface_to_grid_vec = np.array([dx.flatten(),dy.flatten(),dz.flatten()]).T
+                ray_ori = rays_last_interface.orientations
+                ray_ori_mean = np.array([ray_ori.x[rr:rr+2, 2].mean(0), 0, ray_ori.z[rr:rr+2, 2].mean(0)])
+                ray_ori_mean /= np.linalg.norm(ray_ori_mean,2)
+                dist_grid = np.dot(interface_to_grid_vec,ray_ori_mean)#np.linalg.norm(interface_to_grid_vec,2,1)
+                grid_time = dist_grid / vel_final
+    
+                #Adjust for offset of beam origin from centre of array
+                ray_origin = rays_first_interface.points[rr:rr+2].mean(0)
+                ray_origin_ori = rays_first_interface.orientations
+                ray_origin_ori_mean = np.array([ray_origin_ori.x[rr:rr+2, 2].mean(0), 0, ray_origin_ori.z[rr:rr+2, 2].mean(0)])
+                ray_origin_ori_mean /= np.linalg.norm(ray_origin_ori_mean,2)
+                dx_adj = ray_origin[0] - probe_centre[0]
+                dy_adj = ray_origin[1] - probe_centre[1]
+                dz_adj = ray_origin[2] - probe_centre[2]
+                origin_to_probe_centre_vec = np.array([dx_adj,dy_adj,dz_adj])
+                dist_adj = np.dot(origin_to_probe_centre_vec,ray_origin_ori_mean)
+                adj_time = dist_adj / vel_initial
+                
+                #Add to time_array - NOTE: ATM OVERWRITING WHERE A PIXEL IS SEEN BY MORE THAN ONE BEAM
+                n_overwrite = np.sum(travel_times[nn,in_beam.flatten()]>0)
+                if n_overwrite>0:
+                    print(f"Overwriting {n_overwrite} grid points")
+                travel_times[nn,in_beam] = grid_time[in_beam] +interface_time[rr] +  + adj_time
+        
+        travel_times[nn,~in_plane_wave.flatten()] = np.inf
+            
+        # Ray object - NOTE ONLY TRAVEL TIMES REALLY FOR PWI
+        fermat_path = FermatPath.from_path(views[viewname].tx_path)
+        fermat_path[0].coords = fermat_path[0].coords[np.newaxis,:,:] #work around to get by assert in Rays
+        interior_indices = np.zeros([fermat_path.num_points_sets-2,Nt,Grid.size],dtype=int) #not relevant at all to PWI transmit path
+        pwi_rays = Rays(travel_times, interior_indices, fermat_path)
+            
+        # Overwrite tx_path with PWI
+        views[viewname].tx_path.rays = pwi_rays
+    
+        #Mask recieve where transmit invalid
+        #lookup_times_tx = views[viewname].tx_path.rays.times
+        #views[viewname].rx_path.rays.times[:,np.isinf(lookup_times_tx.sum(0))] = np.inf
+        
