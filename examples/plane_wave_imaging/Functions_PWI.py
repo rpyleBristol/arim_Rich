@@ -5,142 +5,32 @@ from matplotlib.path import Path
 from collections import OrderedDict
 from arim.models.block_in_immersion import *
 
-def line_intersection_with_segments(A, theta1, points, orientations=[]):
-    """
-    Find the intersections of a line defined by origin A and angle theta1 with a set of line segments.
-    
-    Parameters:
-    A (list): Origin of the line [x, 0, z]
-    theta1 (float): Angle of the line in radians
-    curve (np.ndarray): n_points by 2 numpy array of coordinates
-    
-    Returns:
-    list: Closest intersection point [x, 0, z] to the origin A
-    """
-    intersections = []
-    if len(orientations)==0:
-        orientations = np.zeros([points.shape[0],])
-    
-    # Line direction vector
-    dx = math.cos(theta1)
-    dz = math.sin(theta1)
-    
-    num_segments = points.shape[0] - 1
-    
-    for i in range(num_segments):
-        x1, z1 = points[i]
-        x2, z2 = points[i + 1]
-        
-        # Line segment direction vector
-        dx_seg = x2 - x1
-        dz_seg = z2 - z1
-        
-        # Determinant
-        det = -dx * dz_seg + dz * dx_seg
-        
-        if det == 0:
-            continue  # Lines are parallel
-        
-        # Solve for t and u (parametric equations)
-        t = ((A[0] - x1) * dz_seg - (A[2] - z1) * dx_seg) / det
-        u = ((A[0] - x1) * dz - (A[2] - z1) * dx) / det
-        
-        # Check if intersection is within the line segment
-        if 0 <= u <= 1 and t > 0:
-            intersection_x = A[0] + t * dx
-            intersection_z = A[2] + t * dz
-            intersections.append(([intersection_x, 0, intersection_z], orientations[i]))
-    
-    if not intersections:
-        return [],None
-    
-    closest_intersection, associated_orientation = min(intersections, key=lambda point: (point[0][0] - A[0])**2 + (point[0][1] - A[-2])**2)
-    
-    return closest_intersection, associated_orientation
 
-
-def plane_wave_intersection_for_one_ray(A,couplant_angle,probe_angle,fw,c1,c2,bound):
-    theta1 = np.deg2rad(couplant_angle)
-    theta1 += probe_angle
-    
-    #Probe to frontwall
-    points = np.stack([fw[0].x,fw[0].z],1)
-    orientations = np.arctan2(fw[1].z[:,2] , fw[1].x[:,2])
-    S1,wall_angle1 = line_intersection_with_segments(A, theta1, points, orientations) 
-    if len(S1)==0: #Check intersection with fw
-        S1 = [np.nan,np.nan,np.nan]
-        S2 = [np.nan,np.nan,np.nan]
-    else:
-        #Frontwall to backwall
-        
-        alpha = np.sin(theta1-wall_angle1) * c2 / c1
-        if abs(alpha)>1: #Check critical angle
-            S2 = [np.nan,np.nan,np.nan]
-            theta2 = np.nan
-        else:
-            theta2 = np.arcsin(alpha)+wall_angle1
-            S2,_ = line_intersection_with_segments(S1, theta2, bound) 
-
-    return S1,S2,theta1,theta2
-
-def plane_wave_intersections(couplant_angles,N_rays,c1,c2,fw,Probe,Grid):
-    """
-    Find the plane wave rays through couplant into a sample.
-    
-    Parameters:
-    couplant_angles (list): Angles in degrees of transmitted plane waves
-    N_rays (float): Number of rays to split plane wave into. Produces N_rays-1 imaging regions for PWI.
-    c1, c2 (floats): Sound speeds in m/s in couplant and sample respectively
-    fw (OrientedPoints): Frontwall description
-    Probe (Object): Description of probe
-    Grid: (Object): Description of imaging grid
-    
-    Returns:
-    list: Points where rays intersect with probe, frontwall and imaging grid
-    """
-    
-    probe_angle = np.arctan2(Probe.to_oriented_points().orientations.z[:,2] ,Probe.to_oriented_points().orientations.x[:,2])[0]
-    origin_positions = np.stack([np.linspace(Probe.locations.x[0],Probe.locations.x[-1],N_rays,endpoint=True),
-                                 np.linspace(Probe.locations.z[0],Probe.locations.z[-1],N_rays,endpoint=True)],1)
-    Nt = len(couplant_angles)
-    
-    
-    
-    bound = np.array([[Grid.xmin,Grid.zmin],
-                        [Grid.xmax,Grid.zmin],
-                        [Grid.xmax,Grid.zmax],
-                        [Grid.xmin,Grid.zmax],
-                        [Grid.xmin,Grid.zmin]])
-    
-    transmit_rays = []
-    for N_ii in range(Nt):
-        rays = []
-        for ray_ii in range(N_rays):
-        
-
-            A = [origin_positions[ray_ii,0],0, origin_positions[ray_ii,1]] #element position
-            S1,S2,theta1,theta2 = plane_wave_intersection_for_one_ray(A,couplant_angles[N_ii],probe_angle,fw,c1,c2,bound)
-
-            coords = np.stack([A,
-                               S1,
-                               S2],0)
-            rays.append( g.default_oriented_points(g.Points(coords,name=f'ray {ray_ii}, pw {couplant_angles[N_ii]}°')))
-            
-        #rays = g.combine_oriented_points(rays)
-        transmit_rays.append( rays )
-    return transmit_rays
 
 
 def is_point_in_polygon_grid(Grid, polygon):
     """
-    Find the points in the grid that are within the four sided polygon
-    
-    Parameters:
-    Grid (object): Grid of imaging points
-    N_rays (list): 4x2 grid defining the corner points of the polygon
-    
-    Returns:
-    mask: Numpy array of points within the polygon
+    For each point in the Grid, check if it lies within the given four-sided polygon.
+
+    Parameters
+    ----------
+    Grid
+        Object containing imaging points.
+        Attributes:
+        - x: Shape (n, 1, m)
+        - z: Shape (n, 1, m)
+    polygon
+        List of shape (4, 2) defining the corner points of the polygon.
+
+    Returns
+    -------
+    mask
+        Numpy array of shape (n, m). Points within the polygon are marked as True.
+
+    Notes
+    -----
+    Uses matplotlib's Path.contains_points to check if points lie within the polygon.
+
     """
     X = Grid.x[:,0,:]
     Z = Grid.z[:,0,:]
@@ -171,18 +61,24 @@ def make_paths_pwi(
     before reflection against the backwall and Y is the mode after reflection.
     The path XY in transmit convention is the path YX in receive convention.
 
+    All paths are given the postscript '-pw' to indicate that their path is 
+    described by a plane wave.
+    
     Parameters
     ----------
     block_material : Material
+        The material of the block.
     couplant_material : Material
+        The couplant material.
     interface_dict : dict[Interface]
-    max_number_of_reflection : int
-        Default: 1.
-
+        Dictionary of interfaces with keys "probe", "frontwall_trans", "grid", and wall names.
+    max_number_of_reflection : int, optional
+        The maximum number of reflections allowed. Default is 1.
 
     Returns
     -------
     paths : OrderedDict
+        Ordered dictionary of paths.
 
     """
     paths = OrderedDict()
@@ -243,8 +139,8 @@ def make_views_pwi(
     walls_for_imaging=None,
 ):
     """
-    Make views for the measurement model of a block in immersion (scatterers response
-    only).
+    Make views for the measurement model of a block in immersion, transmission 
+    by plane, focussed in reception.
 
     Parameters
     ----------
@@ -259,9 +155,6 @@ def make_views_pwi(
         is an immersion configuration. Subsequent reflections from the front wall
         may be included. The length of this list will be used as the max number of
         reflections. The default is None, i.e. no reflections.
-    tfm_unique_only : bool
-        Default False. If True, returns only the views that give *different* imaging
-        results with TFM (AB-CD and DC-BA give the same imaging result).
 
     Returns
     -------
@@ -296,19 +189,21 @@ def make_views_pwi(
 
 def make_views_from_paths_pwi(paths_dict_tx, paths_dict_rx):
     """
-    Returns 'View' objects for the case of a block in immersion.
+    Returns 'View' objects for the case of a block in immersion assuming plane
+    wave propogation.
 
-    Consut all possible views that can be constructed with the paths given as argument.
-
-    If unique only ``unique_only`` is false,
+    Construct all possible views that can be constructed with the paths given 
+    as argument.
 
     Parameters
     ----------
-    paths_dict : Dict[Path]
-        Key: path names (exemple: 'L', 'LT'). Values: :class:`Path`
-    tfm_unique_only : bool
-        Default: False. If True, returns only the views that give *different* imaging
-        results with TFM (AB-CD and DC-BA give the same imaging result).
+    paths_dict_tx : Dict[Path]
+        Key: transmit path names
+        (example: 'L', 'LT', 'L -pw'). Values: :class:`Path`
+        
+    paths_dict_rx : Dict[Path]
+        Key: recieve path names 
+        (example: 'L', 'LT', 'L -pw'). Values: :class:`Path`
 
     Returns
     -------
@@ -324,6 +219,31 @@ def make_views_from_paths_pwi(paths_dict_tx, paths_dict_rx):
     return views
 
 def shift_time_domain_signals(Frame, delays):
+    """
+    Shifts the time domain signals in Frame by the specified delays.
+
+    Parameters
+    ----------
+    Frame : object
+        Object containing time domain signals.
+        Attributes:
+        - timetraces: Array of shape (num_signals, num_time_points).
+        - time.samples: Array of time points.
+    delays : array_like
+        Array of delays for each signal.
+
+    Returns
+    -------
+    Frame : object
+        The Frame object with shifted time domain signals.
+
+    Notes
+    -----
+    - Shifts the signals in Frame.timetraces by the corresponding delays.
+    - If the delay is longer than the time vector, the signal is set to zero.
+    - Positive delays shift the signal to the right, negative delays shift to the left.
+
+    """
     data = Frame.timetraces
     time_points = Frame.time.samples
     num_signals, num_time_points = data.shape
@@ -349,7 +269,35 @@ def shift_time_domain_signals(Frame, delays):
 
 
 def find_intersections(ray_current, interface_current, intersect_tol=1e-9, closest=True):
+    """
+    Finds the intersection points between rays and a surface, along with angles 
+    of incidence and surface angles.
+
+    Parameters
+    ----------
+    ray_current : OrientedPoints containing location and ray direction of ray 
+    origin
+    interface_current : Interface object describing surface
+        Attributes:
+        - points.coords: Array of surface coordinates.
+    intersect_tol : float, optional
+        Tolerance for ray/surface intersection check. Default is 1e-9.
+    closest : bool, optional
+        If True, find the closest intersection point. If False, find the 
+        farthest. Default is True.
+
+    Returns
+    -------
+    intersection_pts : ndarray
+        Array of intersection points.
+    angles_of_incidence : ndarray
+        Array of angles of incidence - RELATIVE TO SURFACE NORMAL.
+    surface_angles : ndarray
+        Array of surface angles.
         
+
+    """
+    
     pts_ray, ori_ray = ray_current
     coords = interface_current.points.coords
 
@@ -369,8 +317,13 @@ def find_intersections(ray_current, interface_current, intersect_tol=1e-9, close
         else:
             distance_check = 0
         for i in range(len(coords) - 1):
-            p1 = coords[i]
-            p2 = coords[i + 1]
+            # By convention ensure pair of surface points are ordered by x-axis position
+            if coords[i,0] > coords[i+1,0]:
+                p2 = coords[i]
+                p1 = coords[i + 1]
+            else:
+                p1 = coords[i]
+                p2 = coords[i + 1]
 
             # Define the segment direction
             segment_direction = p2 - p1
@@ -416,7 +369,6 @@ def find_intersections(ray_current, interface_current, intersect_tol=1e-9, close
 
                         # Calculate the angle of the surface at the intersection point
                         surface_angle = np.arctan2(segment_direction[2], segment_direction[0])
-                        surface_angle = np.degrees(surface_angle)
 
         if returned_intersection is not None:
             intersection_pts[idx] = returned_intersection
@@ -430,6 +382,24 @@ def find_intersections(ray_current, interface_current, intersect_tol=1e-9, close
     return intersection_pts, angles_of_incidence, surface_angles
 
 def make_orient_pts_from_intersect(coords,angles_of_incidence,name='Plane wave intersections'):
+    """
+    Create oriented points from intersection coordinates and angles of incidence.
+
+    Parameters
+    ----------
+    coords : ndarray
+        Array of intersection coordinates.
+    angles_of_incidence : ndarray
+        Array of angles of incidence corresponding to the intersection points.
+    name : str, optional
+        Name for the oriented points. Default is 'Plane wave intersections'.
+
+    Returns
+    -------
+    or_pts : OrientedPoints
+        Combined OrientedPoints created from the intersection coordinates and angles of incidence.
+
+    """
     or_pts = []
     for b in range(coords.shape[0]):
         points = g.Points(coords[b:b+1])
@@ -444,7 +414,29 @@ def make_orient_pts_from_intersect(coords,angles_of_incidence,name='Plane wave i
 import arim.plot as aplt
 import matplotlib.pyplot as plt
 def PWI_find_all_intersections(views,N_rays,plane_waves,intersect_tol=1e-9,plot_on=False):
+    """
+    Find all intersections of plane wave with interface, splitting plane wave
+    into rays.
 
+    Parameters
+    ----------
+    views : dict
+        Dictionary of views to draw paths from.
+    N_rays : int
+        Number of rays to use.
+    plane_waves : dict
+        Dictionary of plane waves with their corresponding angles.
+    intersect_tol : float, optional
+        Tolerance for intersection checks. Default is 1e-9.
+    plot_on : bool, optional
+        If True, plot the interfaces and rays. Default is False.
+
+    Returns
+    -------
+    rays : dict
+        Dictionary of rays for each view and wave.
+
+    """
     rays = {}
     for viewname, view in views.items():
         path = view.tx_path
@@ -474,7 +466,9 @@ def PWI_find_all_intersections(views,N_rays,plane_waves,intersect_tol=1e-9,plot_
                 c2 = path.materials[ii+1].velocity(m2)
    
                 intersection_pts, angles_of_incidence, surface_angles = find_intersections(rays_previous,interface_current, intersect_tol=intersect_tol)
-                angles_of_transmission = np.arcsin(np.sin(angles_of_incidence) * c2 / c1) + surface_angles
+                
+                #calculate refraction and return to global angular frame
+                angles_of_transmission = np.arcsin(np.sin(angles_of_incidence) * c2 / c1) - surface_angles
                 if ii > 0:
                     #ASSUMING REFLECTIONS PAST FIRST TRANSMISSION
                     angles_of_transmission = np.pi - angles_of_transmission
@@ -505,7 +499,48 @@ def PWI_find_all_intersections(views,N_rays,plane_waves,intersect_tol=1e-9,plot_
     return rays
 
 from arim.ray import FermatPath, Rays
-def ray_tracing_for_views_PWI(Grid,Probe,views,plane_waves,rays):
+def ray_tracing_for_views_PWI(Grid,Probe,views,plane_waves,rays,intersect_tol=1e-9):
+    """
+    Perform calculates travel times of plane wave from Probe to imaging grid 
+    via paths described in views.
+
+    Parameters
+    ----------
+    Grid : object
+        Object representing the imaging grid.
+        Attributes:
+        - xmin, xmax, zmin, zmax: Boundaries of the grid.
+        - x, y, z: Coordinates of the grid points.
+        - size: Total number of grid points.
+    Probe : object
+        Object representing the probe.
+        Attributes:
+        - locations.coords: Coordinates of the probe locations.
+    views : dict
+        Dictionary of views containing transmission paths.
+    plane_waves : dict
+        Dictionary of plane waves with their corresponding angles.
+    rays : dict
+        Dictionary of rays for each view and wave.
+    intersect_tol : float, optional
+        Tolerance for intersection checks. Default is 1e-9.
+
+    Returns
+    -------
+    None. 
+    Calculated travel times stored in the `tx_path` attribute of each view as 
+    a Rays object.
+
+    Notes
+    -----
+    - Based on the plane wave adapted in postprocessing (PWAPP) described in:
+      Rachev, Rosen K., et al. "Plane wave imaging techniques for immersion 
+      testing of components with nonplanar surfaces."
+      IEEE Transactions on Ultrasonics, Ferroelectrics, and 
+      Frequency Control 67.7 (2020): 1303-1316.
+
+    """
+    
     grid_bound_corners = np.array([[Grid.xmin,0,Grid.zmin],
                                     [Grid.xmax,0,Grid.zmin],
                                     [Grid.xmax,0,Grid.zmax],
@@ -527,7 +562,7 @@ def ray_tracing_for_views_PWI(Grid,Probe,views,plane_waves,rays):
             
     
             #Find beams in imaging grid
-            grid_bound_intersections, _ , _ = find_intersections(rays_last_interface,grid_bound_pts, intersect_tol=1e-9, closest=False)
+            grid_bound_intersections, _ , _ = find_intersections(rays_last_interface,grid_bound_pts, intersect_tol=intersect_tol, closest=False)
             
             
             #Travel time up to last interface
@@ -605,7 +640,7 @@ def ray_tracing_for_views_PWI(Grid,Probe,views,plane_waves,rays):
         # Overwrite tx_path with PWI
         views[viewname].tx_path.rays = pwi_rays
     
-        #Mask recieve where transmit invalid
+        #Mask recieve focal law where transmit invalid
         #lookup_times_tx = views[viewname].tx_path.rays.times
         #views[viewname].rx_path.rays.times[:,np.isinf(lookup_times_tx.sum(0))] = np.inf
         

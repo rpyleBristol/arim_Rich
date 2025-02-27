@@ -15,6 +15,24 @@ from Functions_PWI import make_views_pwi,shift_time_domain_signals,PWI_find_all_
 from collections import OrderedDict
 
 def SurfaceToWall(surfaces,wall_points_per_mm,names=['Frontwall']):
+    """
+    Convert surfaces to walls with a given number of points per millimeter.
+
+    Parameters
+    ----------
+    surfaces
+        List of surfaces, each represented as an array of points.
+    wall_points_per_mm
+        Number of wall points per millimeter.
+    names
+        List of names for the walls (default is ['Frontwall']).
+
+    Returns
+    -------
+    Walls
+        Dictionary of walls with names as keys and wall geometries as values.
+
+    """
     Walls = {}
     for ss,s in enumerate(surfaces):
         numpoints = []
@@ -38,7 +56,7 @@ array_rot = np.array([0,0,0])
 
 ## Imaging mesh
 imaging_res = 0.1e-3
-wall_points_per_mm = 10#8
+wall_points_per_mm = 10
 
 ## Sample
 standoff = 0.0195
@@ -49,12 +67,12 @@ couplant_angles = [-19.2414] #Angle of plane waves fired
 plane_waves = {}
 for x,theta in enumerate(couplant_angles):
     plane_waves[f'PW {x}'] = theta
+
 #%% Surfaces
 surface_point_n = 1000
-curvature_height = 0
+curvature_height = 0#-5e-3
 
 x1 = np.linspace(-25e-3,25e-3,surface_point_n)
-
 z1 =  curvature_height*np.sin((x1-x1.min())/(x1.max()-x1.min())*np.pi)+standoff - curvature_height*0.5
 
 x2 = x1.copy()
@@ -65,7 +83,8 @@ s2 = np.stack([x2,np.zeros_like(z1),z2],1)
 #%% Objects
 #Probe
 Probe = arim.io.probe_from_conf(conf)
-
+N_rays = 2*Probe.numelements - 1 # (2*numelements - 1) in Rachev, Rosen K., et al. "Plane wave imaging techniques for immersion testing of components with nonplanar surfaces."
+ 
 ##Walls 
 wall_names = ['Frontwall','Backwall']
 Walls = SurfaceToWall([s1,s2],wall_points_per_mm,wall_names)
@@ -83,7 +102,6 @@ Grid = arim.geometry.Grid(
     zmax = standoff+thickness,
     pixel_size = imaging_res,
 )
-N_rays = 2*Probe.numelements - 1 # (2*numelements - 1) in Rachev, Rosen K., et al. "Plane wave imaging techniques for immersion testing of components with nonplanar surfaces."
 
     
 #Paths
@@ -164,9 +182,9 @@ ray_tracing_for_paths(
     convert_to_fortran_order=False
 )
 #%% PWI focal law (i. propagation time calcs)
-
-rays = PWI_find_all_intersections(views,N_rays,plane_waves,intersect_tol=1e-9,plot_on=False)
-ray_tracing_for_views_PWI(Grid,Probe,views,plane_waves,rays)
+intersect_tol = 1e-9
+rays = PWI_find_all_intersections(views,N_rays,plane_waves,intersect_tol=intersect_tol,plot_on=False)
+ray_tracing_for_views_PWI(Grid,Probe,views,plane_waves,rays,intersect_tol=intersect_tol)
 
 
 #%% Travel time plot for debugging
@@ -223,7 +241,7 @@ for i, (viewname, pwi) in enumerate(pwis.items()):
         show_probe=True,
         show_last=True,
         show_orientations=True,
-        n_arrows=10,markers=["o"]*len(rays[viewname][wavename]),)
+        n_arrows=10,markers=[""]*len(rays[viewname][wavename]),)
     ax1.set_adjustable("box")
     ax1.axis([Grid.xmin, Grid.xmax, Grid.zmax, 0])
     aplt.plot_interfaces(
