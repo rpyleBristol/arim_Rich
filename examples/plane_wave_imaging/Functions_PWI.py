@@ -361,9 +361,10 @@ def find_intersections(ray_current, interface_current, intersect_tol=1e-9, close
 
                         # Calculate angle of incidence
                         normal = np.array([-segment_direction[2], 0, segment_direction[0]])  # Normal vector to the segment
+
                         dot_product = np.dot(ray_direction, normal)
                         cross_product = np.cross(ray_direction, normal)
-                        angle_of_incidence = np.arccos(np.clip(dot_product, -1.0, 1.0))
+                        angle_of_incidence = np.arccos(dot_product) #np.arccos(np.clip(dot_product, -1.0, 1.0))
                         if cross_product[1] > 0:
                             angle_of_incidence = -angle_of_incidence
 
@@ -467,8 +468,13 @@ def PWI_find_all_intersections(views,N_rays,plane_waves,intersect_tol=1e-9,plot_
    
                 intersection_pts, angles_of_incidence, surface_angles = find_intersections(rays_previous,interface_current, intersect_tol=intersect_tol)
                 
-                #calculate refraction and return to global angular frame
-                angles_of_transmission = np.arcsin(np.sin(angles_of_incidence) * c2 / c1) - surface_angles
+                #calculate refraction
+                angles_of_transmission = np.arcsin(np.sin(angles_of_incidence) * c2 / c1)
+                #account for negative z coordinates
+                angles_of_transmission += (np.sign(intersection_pts[:,2]) == -1) * np.pi
+                #return to global frame
+                angles_of_transmission = angles_of_transmission + surface_angles
+                
                 if ii > 0:
                     #ASSUMING REFLECTIONS PAST FIRST TRANSMISSION
                     angles_of_transmission = np.pi - angles_of_transmission
@@ -488,7 +494,7 @@ def PWI_find_all_intersections(views,N_rays,plane_waves,intersect_tol=1e-9,plot_
                     show_probe=True,
                     show_last=True,
                     show_orientations=True,
-                    n_arrows=10,markers=["o"]*len(interfaces),)
+                    n_arrows=np.min([N_rays,50]),markers=["o"]*len(interfaces),)
                 aplt.plot_interfaces(
                     interfaces,
                     ax = ax,
@@ -551,7 +557,8 @@ def ray_tracing_for_views_PWI(Grid,Probe,views,plane_waves,rays,intersect_tol=1e
     probe_centre = Probe.locations.coords.mean(0)
     Nt = len(plane_waves.items())
     for viewname, view in views.items():
-        travel_times = np.zeros([Nt,Grid.size])
+        n_rays = rays[viewname]['PW 0'][0].points.shape[0]
+        travel_times = np.zeros([Nt,Grid.size,n_rays])
         numlegs = view.tx_path.numlegs
         assert view.tx_path.interfaces[-1].points.name == Grid.name
         in_plane_wave = np.zeros(Grid.shape,dtype=bool)
@@ -624,23 +631,100 @@ def ray_tracing_for_views_PWI(Grid,Probe,views,plane_waves,rays,intersect_tol=1e
                 adj_time = dist_adj / vel_initial
                 
                 #Add to time_array - NOTE: ATM OVERWRITING WHERE A PIXEL IS SEEN BY MORE THAN ONE BEAM
-                n_overwrite = np.sum(travel_times[nn,in_beam.flatten()]>0)
+                """n_overwrite = np.sum(travel_times[nn,in_beam.flatten(),:]>0)
                 if n_overwrite>0:
                     print(f"Overwriting {n_overwrite} grid points")
-                travel_times[nn,in_beam] = grid_time[in_beam] +interface_time[rr] +  + adj_time
-        
-        travel_times[nn,~in_plane_wave.flatten()] = np.inf
-            
+                travel_times[nn,in_beam] = grid_time[in_beam] + interface_time[rr] +  + adj_time"""
+                
+                in_beam_idx = np.where(in_beam)[0]
+                for idx in in_beam_idx:
+                    # Find the first index where travel_times[nn, idx, :] is 0
+                    zero_indices = np.where(travel_times[nn, idx, :] == 0)[0]
+                    if zero_indices.size > 0:
+                        first_zero_index = zero_indices[0]
+                        travel_times[nn, idx, first_zero_index] = grid_time[idx] + interface_time[rr]  + adj_time
+                #plt.figure()
+                #plt.imshow(travel_times[nn,:,0].reshape(Grid.shape)[:,0,:].T)
+                
+                        
+        max_repeats = (travel_times>0).sum(2).max()
+        travel_times = travel_times[:,:,:max_repeats]
+        assert max_repeats == (travel_times>0).sum(2).max()
+        #travel_times[nn,~in_plane_wave.flatten(),:] = np.inf
+        travel_times[travel_times==0] = np.inf
         # Ray object - NOTE ONLY TRAVEL TIMES REALLY FOR PWI
-        fermat_path = FermatPath.from_path(views[viewname].tx_path)
+        """fermat_path = FermatPath.from_path(views[viewname].tx_path)
         fermat_path[0].coords = fermat_path[0].coords[np.newaxis,:,:] #work around to get by assert in Rays
+        fermat_path[0].coords = np.repeat(fermat_path[0].coords,travel_times.shape[0],0)
         interior_indices = np.zeros([fermat_path.num_points_sets-2,Nt,Grid.size],dtype=int) #not relevant at all to PWI transmit path
-        pwi_rays = Rays(travel_times, interior_indices, fermat_path)
+        pwi_rays = Rays(travel_times, interior_indices, fermat_path)"""
             
         # Overwrite tx_path with PWI
-        views[viewname].tx_path.rays = pwi_rays
+        #views[viewname].tx_path.rays = pwi_rays
+        views[viewname].tx_path.times = travel_times
     
-        #Mask recieve focal law where transmit invalid
-        #lookup_times_tx = views[viewname].tx_path.rays.times
-        #views[viewname].rx_path.rays.times[:,np.isinf(lookup_times_tx.sum(0))] = np.inf
+
+       
+from arim.im.tfm import FocalLaw,TfmResult
+from arim.im.das import delay_and_sum
+def pwi_for_view(frame, grid, view, amplitudes=None, mask=None, **kwargs_delay_and_sum):
+    """
+    TFM for a view
+
+    Parameters
+    ----------
+    frame : Frame
+    grid : Points
+    velocity : float
+    amplitudes : None or ndarray or TxRxAmplitudes
+    mask : ndarray[bool]
+        Mask which is applied to `grid.to_oriented_points()` when making views.
+    kwargs_delay_and_sum : dict
+
+    Returns
+    -------
+    tfm_res : TfmResult
+
+
+    """
+
+    max_n_overlaps = view.tx_path.times.shape[2]
+    res = np.zeros([grid.size,max_n_overlaps],dtype=frame.timetraces.dtype)
+    for overlap_n in range(max_n_overlaps):
+        lookup_times_tx = view.tx_path.times[:,:,overlap_n].T
+        lookup_times_rx = view.rx_path.rays.times.T
+        #mask recieve where invalid
+        #lookup_times_rx[np.isinf(lookup_times_tx.sum(1)),:] = np.inf
+        focal_law = FocalLaw(lookup_times_tx, lookup_times_rx, amplitudes)
+        res[:,overlap_n] = delay_and_sum(frame, focal_law, **kwargs_delay_and_sum)
         
+        #Scale for number of plane waves that have valid contribution to pixel
+        res[:,overlap_n] *= (~np.isinf(view.tx_path.times[:,:,overlap_n])).sum(0)
+        
+    pw_count = (~np.isinf(view.tx_path.times)).sum(2)
+
+    res = res.sum(1)
+    
+    overlap_count = pw_count.sum(0)
+    overlap_count[overlap_count==0] = 1
+    res /= overlap_count
+    
+    #plt.figure()
+    #plt.imshow(abs(pw_count[0].reshape(grid.shape)[:,0,:]))
+
+    
+    if type(grid) in (g.Grid, g.Points):
+        res = res.reshape(grid.shape)
+    elif type(grid) is g.MaskedGrid:
+        res_all = np.zeros(
+            [
+                grid.size,
+            ],
+            dtype=res.dtype,
+        )
+        res_all[~grid.mask.ravel()] = res
+        res = res_all.reshape(grid.shape)
+    else:
+        raise NotImplementedError("Invalid grid type.")
+
+    return TfmResult(res, grid),pw_count

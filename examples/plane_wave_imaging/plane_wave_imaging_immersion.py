@@ -11,7 +11,7 @@ sys.path.append('functions_scanning')
 import arim.ray, arim.io, arim.signal, arim.im
 import arim.models.block_in_immersion as bim
 import arim.plot as aplt
-from Functions_PWI import make_views_pwi,shift_time_domain_signals,PWI_find_all_intersections,ray_tracing_for_views_PWI
+from Functions_PWI import make_views_pwi,shift_time_domain_signals,PWI_find_all_intersections,ray_tracing_for_views_PWI,pwi_for_view
 from collections import OrderedDict
 
 def SurfaceToWall(surfaces,wall_points_per_mm,names=['Frontwall']):
@@ -69,14 +69,14 @@ for x,theta in enumerate(couplant_angles):
     plane_waves[f'PW {x}'] = theta
 
 #%% Surfaces
-surface_point_n = 1000
-curvature_height = 0#-5e-3
+surface_point_n = 2
 
 x1 = np.linspace(-25e-3,25e-3,surface_point_n)
-z1 =  curvature_height*np.sin((x1-x1.min())/(x1.max()-x1.min())*np.pi)+standoff - curvature_height*0.5
+z1 =  np.ones([len(x1)])*standoff
 
 x2 = x1.copy()
 z2 =  np.ones([len(x2)])*(standoff+thickness)
+
 s1 = np.stack([x1,np.zeros_like(x1),z1],1)
 s2 = np.stack([x2,np.zeros_like(z1),z2],1)
 
@@ -94,8 +94,8 @@ Examination = arim.core.BlockInImmersion(arim.io.material_from_conf(conf['block_
      
 ##Grid
 Grid = arim.geometry.Grid(
-    xmin = -22e-3,#x1[0]-1e-3,
-    xmax = -12e-3,#x1[-1]+1e-3,
+    xmin = -22e-3,
+    xmax = -12e-3,
     ymin = 0.0,
     ymax = 0.0,
     zmin = standoff,
@@ -114,9 +114,6 @@ Paths = bim.make_paths(Examination.block_material, Examination.couplant_material
 #Frame
 Frame = arim.io.frame_from_conf(conf)
 Frame.tx = np.zeros_like(Frame.rx)
-#import scipy
-#Frame.timetraces = scipy.io.loadmat('L5_A0_sim.mat')['exp_data']['timetraces'][0][0][0].T
-
 
 #%% Transmission delay law (calc used in transmission, not in imaging, only here for fullness)
 Nt = len(couplant_angles) #number of fired plane waves
@@ -128,30 +125,27 @@ for c in couplant_angles:
         ref_elements.append([-1]) #Element with time=0 delay
     else:
         ref_elements.append([0])
-transmission = {'block_angles':block_angles,
-                'couplant_angles':couplant_angles,
-                'reference_elements':ref_elements}
 
 #Delay law
-transmission['delay_times'] = np.zeros([Nt,conf['probe']['numx']])
+delay_times = np.zeros([Nt,conf['probe']['numx']])
 for angle,n in zip(couplant_angles,range(Nt)):
     t_x_diff = Probe.locations.x-Probe.locations.x[ref_elements[n]]
     delay_vec = t_x_diff * np.sin(np.deg2rad(angle)) / conf['couplant_material']['longitudinal_vel']
 
-    transmission['delay_times'][n,:] = delay_vec
-transmission['delay_times'] = transmission['delay_times'].flatten(order=timetrace_flatten_order)
+    delay_times[n,:] = delay_vec
+delay_times =  delay_times.flatten(order=timetrace_flatten_order)
 
 #%% Apply delay to timetraces so at 0 time the wavefront is at the central element
 
-transmission['reference_element_delay'] = np.zeros([Nt,conf['probe']['numx']])
+reference_element_delay = np.zeros([Nt,conf['probe']['numx']])
 for angle,n in zip(couplant_angles,range(Nt)):
     t_x_diff_ref = Probe.locations.x.mean()-Probe.locations.x[ref_elements[n]]
     delay_vec_ref = t_x_diff_ref * np.sin(np.deg2rad(angle)) / conf['couplant_material']['longitudinal_vel']
-    transmission['reference_element_delay'][n,:] = -abs(delay_vec_ref)
+    reference_element_delay[n,:] = -abs(delay_vec_ref)
 
-transmission['reference_element_delay'] = transmission['reference_element_delay'].flatten(order=timetrace_flatten_order)
+reference_element_delay = reference_element_delay.flatten(order=timetrace_flatten_order)
 
-Frame = shift_time_domain_signals(Frame,transmission['reference_element_delay'])
+Frame = shift_time_domain_signals(Frame,reference_element_delay)
 
 plt.figure()
 plt.imshow(abs(Frame.timetraces))
@@ -171,7 +165,7 @@ views = OrderedDict({v:views[v] for v in viewname_used})
 
 #%% TFM on reception
 
-paths_set = set([v.rx_path for v in list(views.values())]) #set(v.tx_path for v in list(views.values()))|
+paths_set = set([v.rx_path for v in list(views.values())])
 
 from arim.ray import ray_tracing_for_paths
 
@@ -195,7 +189,7 @@ extent = [Grid.xmin,Grid.xmax,Grid.zmax,Grid.zmin]
 plt.figure(figsize=[len(views)*3,3])
 for ii,(viewname,view) in enumerate(views.items()):
     
-    plotting = views[viewname].tx_path.rays.times[plane_wave_n].reshape(Grid.shape)[:,0,:].T.copy()
+    plotting = views[viewname].tx_path.times[plane_wave_n].reshape(Grid.shape)[:,0,:].T.copy()
     plotting += views[viewname].rx_path.rays.times[recieve_el].reshape(Grid.shape)[:,0,:].T
     
     ax = plt.subplot(1,len(views),ii+1)
@@ -207,16 +201,15 @@ for ii,(viewname,view) in enumerate(views.items()):
 cbar.set_label('Travel time (µs)', rotation=270, labelpad=9)
 #%% Delay and sum
 
-from arim.im.tfm import tfm_for_view
 pwis = dict()
 for viewname, view in views.items():
     with arim.helpers.timeit(f"TFM {view.name}"):
         
-        pwis[viewname] = tfm_for_view(
+        pwis[viewname] = pwi_for_view(
             Frame, Grid, view, fillvalue=0.0, interpolation="nearest"
         )
 
-# %% Plot PWI
+#%% Plot PWI
 clim = -40
 wavename = list(plane_waves.keys())[0]
 

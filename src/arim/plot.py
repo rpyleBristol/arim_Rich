@@ -362,6 +362,7 @@ def plot_oxz(
     filename=None,
     scale="linear",
     ref_db=None,
+    alpha=1
 ):
     """
     Plot data in the plane Oxz.
@@ -456,7 +457,7 @@ def plot_oxz(
         interpolation=interpolation,
         origin="lower",
         extent=(grid.xmin, grid.xmax, grid.zmax, grid.zmin),
-        cmap=cmap,
+        cmap=cmap,alpha=alpha
     )
     if ax.get_xlabel() == "":
         # avoid overwriting labels
