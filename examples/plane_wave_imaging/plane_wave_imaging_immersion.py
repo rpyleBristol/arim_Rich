@@ -205,7 +205,7 @@ pwis = dict()
 for viewname, view in views.items():
     with arim.helpers.timeit(f"TFM {view.name}"):
         
-        pwis[viewname] = pwi_for_view(
+        pwis[viewname],pw_count = pwi_for_view(
             Frame, Grid, view, fillvalue=0.0, interpolation="nearest"
         )
 
@@ -214,7 +214,6 @@ clim = -40
 wavename = list(plane_waves.keys())[0]
 
 for i, (viewname, pwi) in enumerate(pwis.items()):
-    assert pwi.grid is Grid
     fig=plt.figure(figsize=[10,6])
     ax1 = fig.add_subplot(121)
     
